@@ -80,7 +80,17 @@ String message;
   message += F("<td>&nbsp;<input type=\"password\" name=\"password_phminus\" minlength=\"4\" maxlength=\"48\" value= ");
   message += password_phminus;
   message += F("> &nbsp; leave it blank for no password &nbsp;</td></tr>");
-    
+
+  message += F("<tr><td>&nbsp;PH-Filter window (s): &nbsp;</td>");
+  message += F("<td>&nbsp;<input type=\"number\" min=\"10\" name=\"ph_mean_window\" value= ");
+  message += ph_mean_window;
+  message += F(">&nbsp; rolling-mean window, must be &le; MixTime*60 &nbsp;</td></tr>");
+
+  message += F("<tr><td>&nbsp;PH-Filter spike threshold: &nbsp;</td>");
+  message += F("<td>&nbsp;<input type=\"text\" name=\"ph_spike_threshold\" pattern=\"[0-9]*[.]{0,}[0-9]{1,2}\" value= ");
+  message += ph_spike_threshold;
+  message += F(">&nbsp; max deviation from mean (pH), e.g. 0.50 &nbsp;</td></tr>");
+
   message += F("</table>");
   //message += F("<em><b><br>Setting new Values takes around 20s. Please wait..");
   message += F("<br><br><input type=\"submit\" value=\"Submit\"></form><br></br>"); 

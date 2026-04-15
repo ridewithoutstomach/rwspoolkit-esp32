@@ -11,23 +11,105 @@
 //          PHMinus Anfang        PHMinus Anfang
 
 
+// Effektive Ringpuffer-Groesse aus ph_mean_window / polling_delay berechnen,
+// Grenzen klemmen und Filterzustand zuruecksetzen.
+void ph_filter_recalc_size(){
+  long win_s = atol(ph_mean_window);
+  if (win_s < 10) win_s = 10;
+  long max_win_s = atol(check_phMinus_interval_delay) * 60L;
+  if (max_win_s < 10) max_win_s = 10;
+  if (win_s > max_win_s) win_s = max_win_s;
+
+  long samples = (win_s * 1000L) / (long)polling_delay;
+  if (samples < 5) samples = 5;
+  if (samples > PH_BUF_MAX) samples = PH_BUF_MAX;
+
+  ph_buf_size        = (uint16_t)samples;
+  ph_buf_idx         = 0;
+  ph_buf_count       = 0;
+  ph_filtered        = 0.0;
+  ph_filter_init_done = false;
+  ph_spike_count     = 0;
+
+  Serial.print("PH-Filter: window=");
+  Serial.print(win_s);
+  Serial.print("s, buf_size=");
+  Serial.print(ph_buf_size);
+  Serial.print(", spike_thr=");
+  Serial.println(ph_spike_threshold);
+}
+
+
+// Neuen PH-Rohwert einspeisen: Plausi -> Spike-Check -> Ringpuffer -> Mittelwert
+void ph_filter_update(float raw){
+  // 1) Plausi
+  if (raw <= 0.0 || raw >= 14.0) {
+    ph_spike_count++;
+    return;
+  }
+
+  // 2) Spike-Filter gegen aktuellen gleitenden Mittelwert (nur wenn Filter schon angelaufen)
+  if (ph_filter_init_done) {
+    float thr = atof(ph_spike_threshold);
+    if (thr < 0.01) thr = 0.01;
+    if (fabs(raw - ph_filtered) > thr) {
+      ph_spike_count++;
+      return;
+    }
+  }
+
+  // 3) In Ringpuffer schreiben
+  if (ph_buf_size == 0) return;
+  ph_buf[ph_buf_idx] = raw;
+  ph_buf_idx = (ph_buf_idx + 1) % ph_buf_size;
+  if (ph_buf_count < ph_buf_size) ph_buf_count++;
+
+  // 4) Mittelwert neu berechnen
+  double sum = 0.0;
+  for (uint16_t i = 0; i < ph_buf_count; i++) sum += ph_buf[i];
+  ph_filtered = (float)(sum / (double)ph_buf_count);
+
+  ph_filter_init_done = true;
+}
+
+
 void check_phMinus(){
   Serial.println("");
   Serial.println("######################");
   Serial.print("Check PH-Minus every: ");
   Serial.print(check_phMinus_interval_delay); 
   Serial.println(" min");
-  Serial.print("PH Value:");
+  Serial.print("PH raw: ");
   Serial.print(PH.get_last_received_reading());
-  Serial.print(" (");
-  Serial.print (atof(phMinus));
-  Serial.print(" )");
+  Serial.print("  PH filtered: ");
+  Serial.print(ph_filtered, 2);
+  Serial.print("  Setpoint: ");
+  Serial.print(atof(phMinus));
   Serial.println("");
+  Serial.print("PH-Filter buffer: ");
+  Serial.print(ph_buf_count);
+  Serial.print("/");
+  Serial.print(ph_buf_size);
+  Serial.print("  spikes: ");
+  Serial.println(ph_spike_count);
   Serial.print("Temperature: ");
   Serial.println(RTD.get_last_received_reading());
   Serial.println("");
   Serial.print("DoubleCheckCounterRead: ");
   Serial.println(phminus_dblchk_counter_read);
+
+  // Variante Y: Puffer muss zu 100% gefuellt sein, sonst Check komplett ueberspringen.
+  // Counter wird dabei NICHT angetastet (weder ++ noch reset).
+  if (ph_buf_size == 0 || ph_buf_count < ph_buf_size) {
+    Serial.print("PH-Check skipped: buffer ");
+    Serial.print(ph_buf_count);
+    Serial.print("/");
+    Serial.print(ph_buf_size);
+    Serial.println(" (filter warm-up)");
+    Serial.println("######################");
+    Serial.println("");
+    return;
+  }
   
   
  // PHMinus Prüfung Anfang  -----------------------------------------------------------------------
@@ -45,7 +127,8 @@ void check_phMinus(){
     //if (PH.get_last_received_reading() < atof(phMinus)){      // Wenn wir über Sollwert sind dann phminus an 
 
     
-    if (PH.get_last_received_reading() > atof(phMinus) && pumpe_on == true ){      // Wenn wir über Sollwert sind dann phminus an 
+    // Dosier-Bedingung: pH zu hoch UND Pumpe laeuft UND (Flow-Gate aus ODER Flow vorhanden)
+    if (ph_filtered > atof(phMinus) && pumpe_on == true && (!check_flow || flow) ){
    
       phminus_dblchk_counter ++;
       Serial.print("phminus_dblchk_counter=");

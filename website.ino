@@ -223,6 +223,60 @@ void handleForm() {
 
   }
 
+  // ## EZO Maintenance: I2C Scan
+  if ( server.hasArg("maint_scan")) {
+    if ( login ) {
+      maint_i2c_scan();
+      String message;
+      addTop(message);
+      message += F("<br><h3><center><a href=\"maintenance.htm\" class=\"button3\">Scan done.. back to page</a></h3>");
+      server.send(200, "text/html", message);
+    }
+    else {
+      String message;
+      addTop(message);
+      message += F("<br><h1><center><a href=\"/\" class=\"button3\">Login first</a>");
+      server.send(200, "text/html", message);
+    }
+    return;
+  }
+
+  // ## EZO Maintenance: UART -> I2C Switch
+  if ( server.hasArg("maint_switch_slot") && server.hasArg("maint_confirm")) {
+    if ( login ) {
+      int slot_index = server.arg("maint_switch_slot").toInt();
+
+      String log;
+      bool ok = maint_switch_to_i2c(slot_index, log);
+
+      String message;
+      addTop(message);
+      message += F("<h2>EZO Switch</h2>");
+      message += log;
+      if (ok) {
+        message += F("<br><center><b>ESP is rebooting now...</b></center>");
+        message += F("<br><center><small>wait ~10s, then open <a href=\"maintenance.htm\">maintenance.htm</a> again and run 'Scan I2C Bus' to verify.</small></center>");
+      } else {
+        message += F("<br><center><a href=\"maintenance.htm\" class=\"button3\">back to maintenance</a></center>");
+      }
+      addBottom(message);
+      server.send(200, "text/html", message);
+
+      if (ok) {
+        delay(5000);
+        ESP.restart();
+      }
+    }
+    else {
+      String message;
+      addTop(message);
+      message += F("<br><h1><center><a href=\"/\" class=\"button3\">Login first</a>");
+      server.send(200, "text/html", message);
+    }
+    return;
+  }
+
+
   // ## AM2315C Offset Kalibrierung
   if ( server.hasArg("dht_temp_offset")) {
 
@@ -378,16 +432,14 @@ void handleForm() {
 
     delay(100);
     if ( login ) {
-      int z = strcmp(server.arg(0).c_str(), "Yes");
-      if ( z == 0 ) {
-        check_flow = true;
-        strcpy(flowcontrol_delay, server.arg(1).c_str());
-        strcpy(hostname_flowcontrol, server.arg(2).c_str());
-        strcpy(password_flowcontrol, server.arg(3).c_str());
-      }
-      else {
-        check_flow = false;
-      }
+      // Namens-basierter Zugriff, robust gegen Feld-Reihenfolge
+      check_flow = (server.arg("check_flow") == "Yes");
+      flow_show  = (server.arg("flow_show")  == "Yes");
+      // Regel: Dosier-Gate an -> Dashboard-Anzeige automatisch auch an
+      if (check_flow) flow_show = true;
+      if (server.hasArg("flowcontrol_delay"))   strcpy(flowcontrol_delay,   server.arg("flowcontrol_delay").c_str());
+      if (server.hasArg("hostname_flowcontrol")) strcpy(hostname_flowcontrol, server.arg("hostname_flowcontrol").c_str());
+      if (server.hasArg("password_flowcontrol")) strcpy(password_flowcontrol, server.arg("password_flowcontrol").c_str());
 
       delay(100);
       write_flow();
@@ -483,6 +535,23 @@ void handleForm() {
       strcpy(phminus_dblchk, server.arg(5).c_str());
       strcpy(password_phminus, server.arg(6).c_str());
 
+      // PH-Filter: Fensterlaenge (Sekunden) mit Validierung
+      if (server.hasArg("ph_mean_window")) {
+        long win_s = server.arg("ph_mean_window").toInt();
+        long max_win_s = atol(check_phMinus_interval_delay) * 60L;
+        if (win_s < 10) win_s = 10;
+        if (max_win_s < 10) max_win_s = 10;
+        if (win_s > max_win_s) win_s = max_win_s;   // Fenster <= MixTime*60
+        snprintf(ph_mean_window, sizeof(ph_mean_window), "%ld", win_s);
+      }
+      // PH-Filter: Spike-Schwelle (pH) mit Plausi
+      if (server.hasArg("ph_spike_threshold")) {
+        float thr = server.arg("ph_spike_threshold").toFloat();
+        if (thr < 0.05) thr = 0.05;
+        if (thr > 2.0)  thr = 2.0;
+        snprintf(ph_spike_threshold, sizeof(ph_spike_threshold), "%.2f", thr);
+      }
+
       String message;
       addTop(message);
       message += F("<br><h1><center><a href=\"phminus.htm\" class=\"button3\">Safed.. back to page</a>");
@@ -494,6 +563,8 @@ void handleForm() {
       read_phminuspmp();
       phminus_dblchk_counter = 0;
       write_phminuspmp();
+      // Filter-Ringpuffer anhand der (ggf. geaenderten) Fensterlaenge neu dimensionieren
+      ph_filter_recalc_size();
 
       ThingSpeak.setField(String(phminusID).toInt(), phminus_fuellstand);
 
@@ -828,6 +899,15 @@ void handleRoot() {
       message += F("<br><br><input type=\"submit\" value=\"Submit\"></form><br></br>");
       message += F("PH: ");
       message += PH.get_last_received_reading();
+      message += F("&nbsp; &Oslash;");
+      if (ph_buf_size > 0 && ph_buf_count >= ph_buf_size) {
+        message += String(ph_filtered, 2);
+      } else {
+        message += F("warm-up ");
+        message += ph_buf_count;
+        message += F("/");
+        message += ph_buf_size;
+      }
       message += F("&nbsp; (");
       message += phMinus;
       message += F(") ");
@@ -863,6 +943,7 @@ void handleRoot() {
       message += F(" ]");
 
       message += ("<br>");
+      message += (check_chlorinator ? F("<span style=\"color:#0c0\">&#9679;</span> ") : F("<span style=\"color:#c00\">&#9679;</span> "));
       message += F("ORP_Counter: ");
       message += orp_chk_counter;
       message += F("&nbsp; (");
@@ -870,6 +951,7 @@ void handleRoot() {
       message += F(" * ");
       message += check_orp_interval_delay;
       message += F("s)<br>");
+      message += (check_phminus ? F("<span style=\"color:#0c0\">&#9679;</span> ") : F("<span style=\"color:#c00\">&#9679;</span> "));
       message += F("PHMinus_Counter: ");
       message += phminus_dblchk_counter;
       message += F("&nbsp; (");
@@ -877,9 +959,12 @@ void handleRoot() {
       message += F(" * ");
       message += check_phMinus_interval_delay;
       message += F("min)<br>");
-      message += F("Flow:");
-      message += flow;
-      message += F("<br>");
+      if (flow_show || check_flow) {
+        message += (check_flow ? F("<span style=\"color:#0c0\">&#9679;</span> ") : F("<span style=\"color:#ec0\">&#9679;</span> "));
+        message += F("Flow: ");
+        message += flow;
+        message += F("<br>");
+      }
 
       message += ("<br>");
 
@@ -898,6 +983,15 @@ void handleRoot() {
     message += F("<center>");
     message += F("PH: ");
     message += PH.get_last_received_reading();
+    message += F("&nbsp; &Oslash;");
+    if (ph_buf_size > 0 && ph_buf_count >= ph_buf_size) {
+      message += String(ph_filtered, 2);
+    } else {
+      message += F("warm-up ");
+      message += ph_buf_count;
+      message += F("/");
+      message += ph_buf_size;
+    }
     message += F("&nbsp; (");
     message += phMinus;
     message += F(") ");
@@ -932,6 +1026,7 @@ void handleRoot() {
     message += humidity_min;
     message += F(" ]");
     message += ("<br>");
+    message += (check_chlorinator ? F("<span style=\"color:#0c0\">&#9679;</span> ") : F("<span style=\"color:#c00\">&#9679;</span> "));
     message += F("ORP_Counter: ");
     message += orp_chk_counter;
     message += F("&nbsp; (");
@@ -939,6 +1034,7 @@ void handleRoot() {
     message += F(" * ");
     message += check_orp_interval_delay;
     message += F("s)<br>");
+    message += (check_phminus ? F("<span style=\"color:#0c0\">&#9679;</span> ") : F("<span style=\"color:#c00\">&#9679;</span> "));
     message += F("PHMinus_Counter: ");
     message += phminus_dblchk_counter;
     message += F("&nbsp; (");
@@ -946,9 +1042,12 @@ void handleRoot() {
     message += F(" * ");
     message += check_phMinus_interval_delay;
     message += F("min)<br>");
-    message += F("Flow:");
-    message += flow;
-    message += F("<br>");
+    if (flow_show || check_flow) {
+      message += (check_flow ? F("<span style=\"color:#0c0\">&#9679;</span> ") : F("<span style=\"color:#ec0\">&#9679;</span> "));
+      message += F("Flow: ");
+      message += flow;
+      message += F("<br>");
+    }
 
     message += ("<br>");
 

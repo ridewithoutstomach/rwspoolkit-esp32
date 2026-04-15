@@ -81,6 +81,11 @@ String message;
 
   message += F("</table>");
 
+  message += F("<br><br><center>");
+  message += F("<a href=\"maintenance.htm\" class=\"button3\" style=\"background:#c00;color:white;font-weight:bold;padding:12px 20px;\">");
+  message += F("&#9881; EZO Maintenance (I2C Scan / UART &rarr; I2C Switch)");
+  message += F("</a></center><br>");
+
 /*  message += F("<tr><td>&nbsp; PH-Plus-MixTime (min): &nbsp;</td>");
   message += F("<td>&nbsp;<input type=\"number\" min=\"0\" name=\"check_phPlus_interval_delay\" value= ");
   message += check_phPlus_interval_delay;

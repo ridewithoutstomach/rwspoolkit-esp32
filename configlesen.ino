@@ -158,8 +158,9 @@ void write_flow(){
         file.write(reinterpret_cast<uint8_t*>(&flowcontrol_delay), sizeof(flowcontrol_delay));
         file.write(reinterpret_cast<uint8_t*>(&hostname_flowcontrol), sizeof(hostname_flowcontrol));
         file.write(reinterpret_cast<uint8_t*>(&password_flowcontrol), sizeof(password_flowcontrol));
+        file.write(reinterpret_cast<uint8_t*>(&flow_show), sizeof(flow_show));
         file.close();
-   
+
 }
 
 
@@ -172,6 +173,9 @@ void read_flow(){
         file.read(reinterpret_cast<uint8_t*>(&flowcontrol_delay), sizeof(flowcontrol_delay));
         file.read(reinterpret_cast<uint8_t*>(&hostname_flowcontrol), sizeof(hostname_flowcontrol));
         file.read(reinterpret_cast<uint8_t*>(&password_flowcontrol), sizeof(password_flowcontrol));
+        // Neu: flow_show optional, Fallback Default false bei alter Datei
+        if (file.available() >= (int)sizeof(flow_show))
+          file.read(reinterpret_cast<uint8_t*>(&flow_show), sizeof(flow_show));
         file.close();
                 
   }
@@ -234,9 +238,11 @@ void write_phminuspmp(){
         file.write(reinterpret_cast<uint8_t*>(&phminus_dblchk), sizeof(phminus_dblchk));
         file.write(reinterpret_cast<uint8_t*>(&phminus_dblchk_counter), sizeof(phminus_dblchk_counter));
         file.write(reinterpret_cast<uint8_t*>(&password_phminus), sizeof(password_phminus));
+        file.write(reinterpret_cast<uint8_t*>(&ph_mean_window), sizeof(ph_mean_window));
+        file.write(reinterpret_cast<uint8_t*>(&ph_spike_threshold), sizeof(ph_spike_threshold));
 
         file.close();
-   
+
 }
 
 
@@ -253,11 +259,16 @@ void read_phminuspmp(){
         file.read(reinterpret_cast<uint8_t*>(&phminus_dblchk), sizeof(phminus_dblchk));
         file.read(reinterpret_cast<uint8_t*>(&phminus_dblchk_counter), sizeof(phminus_dblchk_counter));
         file.read(reinterpret_cast<uint8_t*>(&password_phminus), sizeof(password_phminus));
-        
+        // Neu ab PH-Filter: optional, Fallback auf Defaults wenn Datei noch aus alter Version stammt
+        if (file.available() >= (int)sizeof(ph_mean_window))
+          file.read(reinterpret_cast<uint8_t*>(&ph_mean_window), sizeof(ph_mean_window));
+        if (file.available() >= (int)sizeof(ph_spike_threshold))
+          file.read(reinterpret_cast<uint8_t*>(&ph_spike_threshold), sizeof(ph_spike_threshold));
+
         file.close();
         //strcpy(check_phMinus_interval_delay_std, check_phMinus_interval_delay);
         phminus_dblchk_counter_read = phminus_dblchk_counter;
-  }                           
+  }
 }
 
 void write_heater(){

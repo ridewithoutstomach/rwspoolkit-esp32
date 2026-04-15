@@ -39,7 +39,8 @@ void check_orp(){
    
   // ORP prüfen ob unterer Sollwert unterschritten und unterhalb oberstem Sollwert (chlor_hyst)
   
-  if ((ORP.get_last_received_reading() < atol(orp_min) || chlor_hyst == 1) && pumpe_on == true ){
+  // Dosier-Bedingung: ORP zu niedrig UND Pumpe laeuft UND (Flow-Gate aus ODER Flow vorhanden)
+  if ((ORP.get_last_received_reading() < atol(orp_min) || chlor_hyst == 1) && pumpe_on == true && (!check_flow || flow) ){
 
 
          

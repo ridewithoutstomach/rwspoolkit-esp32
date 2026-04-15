@@ -11,17 +11,28 @@
 
 String check_flow_yes = "checked";  // muss mit server.arg abgefragt werden und zeigt den Button an und ändert send_to_thingspeak
 String check_flow_no = " ";
+String flow_show_yes = " ";
+String flow_show_no  = "checked";
 
 void handlePageFlow(){
 
 if ( check_flow == true ){
-    
+
     check_flow_yes = "checked";
     check_flow_no = " ";
   }
   else{
     check_flow_yes = "";
     check_flow_no = "checked";
+  }
+
+if ( flow_show == true ){
+    flow_show_yes = "checked";
+    flow_show_no  = " ";
+  }
+  else{
+    flow_show_yes = " ";
+    flow_show_no  = "checked";
   }
   
 
@@ -37,9 +48,21 @@ String message;
   message += F("Works with: Chlorinator / ChlorPmp / PHMinus / PHPlus <br><br>");
   
   message += F("<center><table><tr>");
-  message += F("<td>&nbsp;Activate Flow-Control:&nbsp; </td>");
+  message += F("<td>&nbsp;Show Flow in Dashboard:&nbsp; </td>");
   message += F("<td><div class=\"toggle-buttons\">");
-  message += F("<form action=\"/action_page\">&nbsp;<input type=\"radio\" id=\"b1\" name=\"check_flow\" value=\"Yes\" ");
+  message += F("<form action=\"/action_page\">&nbsp;<input type=\"radio\" id=\"fs1\" name=\"flow_show\" value=\"Yes\" ");
+  message += flow_show_yes;
+  message += F(" >");
+  message += F("<label for=\"fs1\">Yes</label>");
+  message += F("<input type=\"radio\" id=\"fs2\" name=\"flow_show\" value=\"No\" ");
+  message += flow_show_no;
+  message += F(" >");
+  message += F("<label for=\"fs2\">No</label>");
+  message += F("</div></td></tr>");
+
+  message += F("<tr><td>&nbsp;Activate Flow-Control (dosing gate):&nbsp; </td>");
+  message += F("<td><div class=\"toggle-buttons\">");
+  message += F("&nbsp;<input type=\"radio\" id=\"b1\" name=\"check_flow\" value=\"Yes\" ");
   message += check_flow_yes;
   message += F(" >");
   message += F("<label for=\"b1\">Yes</label>");
@@ -47,7 +70,7 @@ String message;
   message += check_flow_no;
   message +=F(" >");
   message += F("<label for=\"b2\">No</label>");
-  message += F("</div></td></tr>");  
+  message += F("</div>&nbsp;<small>(dosing gate auto-enables dashboard display)</small></td></tr>");
   message += F("<tr><td>&nbsp;Flow-Delay (s):&nbsp; </td>");
   message += F("<td>&nbsp;<input type=\"number\" min=\"1\" name=\"flowcontrol_delay\"  value= ");
   message += flowcontrol_delay;
