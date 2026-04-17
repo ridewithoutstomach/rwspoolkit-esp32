@@ -167,8 +167,8 @@ bool maint_switch_to_i2c(int slot_index, String &out) {
 
   if (resp.length() == 0) {
     out += F("\nNo UART response!\n");
-    out += F("Circuit is either already in I2C mode, not plugged in,\n");
-    out += F("or the other EZO circuits are still attached.\n");
+    out += F("Circuit is either already in I2C mode\n");
+    out += F("or not plugged into the selected slot.\n");
     out += F("</pre>");
     ezoSerial.end();
     // Slots wieder in Normalzustand, Polling wieder an
@@ -235,11 +235,11 @@ void handlePageMaintenance(){
 
   // ---- Block 2: UART -> I2C Switch ----
   message += F("<hr><center><h3>Switch EZO Circuit: UART &rarr; I2C</h3></center>");
-  message += F("<div style=\"background:#5a4a00;padding:10px;margin:10px;border:2px solid yellow;\">");
-  message += F("<b>&#9888; IMPORTANT:</b><br>");
-  message += F("Before you start the switch, <b>unplug all other EZO circuits</b> from the board.<br>");
-  message += F("Only the circuit you want to program must remain in its slot.<br>");
-  message += F("Otherwise multiple circuits answer on the UART bus and the switch will fail.");
+  message += F("<div style=\"background:#004a1a;padding:10px;margin:10px;border:2px solid #0a0;\">");
+  message += F("<b>&#9881; INFO:</b><br>");
+  message += F("All other EZO circuits can <b>stay plugged in</b>.<br>");
+  message += F("The software automatically isolates the selected slot via enable pins ");
+  message += F("before sending the UART switch command.");
   message += F("</div>");
 
   message += F("<center><form action=\"/action_page\" onsubmit=\"return confirm('Really switch the selected circuit? The ESP will reboot.');\">");
@@ -264,7 +264,7 @@ void handlePageMaintenance(){
 
   message += F("<tr><td><br>");
   message += F("<input type=\"checkbox\" name=\"maint_confirm\" value=\"1\" id=\"maint_confirm\" required>");
-  message += F("<label for=\"maint_confirm\">&nbsp;I have unplugged all other EZO circuits</label>");
+  message += F("<label for=\"maint_confirm\">&nbsp;Yes, switch the selected circuit to I2C mode</label>");
   message += F("</td></tr>");
 
   message += F("<tr><td><br>");
