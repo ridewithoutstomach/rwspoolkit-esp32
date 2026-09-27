@@ -1,5 +1,5 @@
 /* *****************************************************************
-   RWS Pool-Kit v7.0
+   RWS Pool-Kit v7.1
    Copyright (c) 2022-2026 Ridewithoutstomach
    https://rws.casa-eller.de
    https://github.com/ridewithoutstomach/rwspoolkit-esp32
@@ -75,6 +75,12 @@ void ntp_sync() {
 void timer(){
   // NTP unabhaengig vom Timer-Intervall synchronisieren
   ntp_sync();
+
+  // v7.1: Schockchloren haelt die Pumpe auf Dosier-Stufe - Timer + Winter komplett aussetzen
+  if (shock_active) {
+    Serial.println("Timer blocked: Schockchloren aktiv");
+    return;
+  }
 
   if ( winter_modus == true ){
      if (RTD.get_last_received_reading() < String(winter_temp).toInt() || dht_temp() < String(winter_shaft_temp).toInt() ){

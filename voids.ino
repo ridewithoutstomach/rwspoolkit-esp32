@@ -1,5 +1,5 @@
 /* *****************************************************************
-   RWS Pool-Kit v7.0
+   RWS Pool-Kit v7.1
    Copyright (c) 2022-2026 Ridewithoutstomach
    https://rws.casa-eller.de
    https://github.com/ridewithoutstomach/rwspoolkit-esp32
@@ -42,6 +42,11 @@ void call_pumpe_aus(){
           // v7.0: Manual-Pump-ON friert Pumpenstufe ein
           if (pump_manual_on) {
             Serial.println("Pump Off blocked: Manual ON aktiv");
+            return;
+          }
+          // v7.1: Schockchloren - Pumpe darf nicht aus
+          if (shock_active) {
+            Serial.println("Pump Off blocked: Schockchloren aktiv");
             return;
           }
           if (!cached_connect(hostname_pumpe, 80, pumpe_fail_time)) {

@@ -1,5 +1,5 @@
 /* *****************************************************************
-   RWS Pool-Kit v7.0
+   RWS Pool-Kit v7.1
    Copyright (c) 2022-2026 Ridewithoutstomach
    https://rws.casa-eller.de
    https://github.com/ridewithoutstomach/rwspoolkit-esp32
@@ -166,6 +166,7 @@ void chlor_phase_set(uint8_t new_phase) {
   Serial.print(chlor_phase_name(new_phase));
   Serial.println("  ######");
   chlor_phase = new_phase;
+  if (new_phase != CHLOR_PHASE_DISTRIBUTE) shock_post_distribute = false;
   chlor_phase_start_ms    = millis();
   chlor_phase_start_epoch = ntp_synced ? timeClient.getEpochTime() : 0;
   chlor_last_tick_ms = 0;
@@ -495,7 +496,8 @@ void phase_distribute_tick() {
 
   // v7.2: Nacht-Deadline. <=5 min vor Pumpe-Aus VERTEILEN beenden, OBSERVE,
   // Pumpe an Timer freigeben - der schaltet sie sauber ab.
-  unsigned long until_off = minutes_until_last_pump_off_today();
+  // v7.1: Nach Schockchloren wird immer komplett verteilt.
+  unsigned long until_off = shock_post_distribute ? 9999UL : minutes_until_last_pump_off_today();
   if (until_off <= 5UL) {
     Serial.print("Chlor: Nacht-Deadline naht (");
     Serial.print(until_off);
@@ -540,6 +542,169 @@ void phase_distribute_tick() {
 }
 
 // ----------------------------------------------------------------------
+//  v7.1: Schockchloren
+// ----------------------------------------------------------------------
+
+// Schock beenden. aborted = true: vom Benutzer abgebrochen -> direkt BEOBACHTEN,
+// Timer uebernimmt sofort. Sonst regulaeres Ende -> VERTEILEN (ohne Nacht-Deadline).
+void shock_finish(bool aborted) {
+  Serial.println("");
+  Serial.print("######  Schockchloren ");
+  Serial.print(aborted ? "abgebrochen" : "beendet");
+  Serial.println(" - Chlorinator AUS  ######");
+  chlorinator_off();
+  shock_active         = false;
+  shock_end_epoch      = 0;
+  shock_last_assert_ms = 0;
+  orp_chk_counter      = 0;
+  orp_chk_counter_read = 0;
+
+  if (aborted) {
+    timer_interval_delay = standard_timer_interval_delay;
+    previousMillis = 0;                        // timer2() greift beim naechsten Tick
+    chlor_phase_set(CHLOR_PHASE_OBSERVE);      // persistiert auch shock_*
+    return;
+  }
+
+  unsigned long dist = (unsigned long)atol(chlor_distribute_min);
+  if (dist < 1) dist = 1;
+  chlor_force_pump_dose(dist + 5UL);
+  chlor_phase_set(CHLOR_PHASE_DISTRIBUTE);
+  shock_post_distribute = true;                // nach chlor_phase_set, das setzt es sonst zurueck
+  write_chlorinator();
+}
+
+// Schock starten. Rueckgabe: false wenn NTP fehlt oder Stunden ungueltig.
+bool shock_start(long hours) {
+  if (!ntp_synced) {
+    Serial.println("Schockchloren: kein NTP - Start abgelehnt");
+    return false;
+  }
+  if (hours < 1 || hours > SHOCK_MAX_HOURS) return false;
+
+  Serial.println("");
+  Serial.print("######  Schockchloren START: ");
+  Serial.print(hours);
+  Serial.println(" h  ######");
+
+  // Schock hat Vorrang vor Manual-Pump-ON
+  if (pump_manual_on) {
+    Serial.println("Schockchloren beendet Manual Pump ON");
+    pump_manual_on       = false;
+    pump_manual_start_ms = 0;
+    check_pump_on  = "";
+    check_pump_off = "checked";
+  }
+
+  // laufende Chlor-Phase verwerfen (Chlorinator wird gleich ohnehin eingeschaltet)
+  if (chlor_phase != CHLOR_PHASE_OBSERVE) chlor_phase_set(CHLOR_PHASE_OBSERVE);
+  orp_chk_counter      = 0;
+  orp_chk_counter_read = 0;
+
+  shock_active          = true;
+  shock_hours           = (uint16_t)hours;
+  shock_end_epoch       = timeClient.getEpochTime() + (unsigned long)hours * 3600UL;
+  shock_post_distribute = false;
+  shock_last_assert_ms  = 0;
+  write_chlorinator();
+
+  shock_tick();   // sofort schalten
+  return true;
+}
+
+// Restminuten des Schocks (0 wenn unbekannt/abgelaufen)
+unsigned long shock_remaining_min() {
+  if (!shock_active || !ntp_synced) return 0;
+  unsigned long now_epoch = timeClient.getEpochTime();
+  if (now_epoch >= shock_end_epoch) return 0;
+  return (shock_end_epoch - now_epoch + 59UL) / 60UL;
+}
+
+// Laufender Schock: Ende pruefen, Pumpe auf Dosier-Stufe halten,
+// Chlorinator nur bei laufender Pumpe (+ Flow, falls Flow-Gate aktiv).
+// ORP wird NICHT ausgewertet.
+void shock_tick() {
+  if (!ntp_synced) return;                     // nach Reboot erst Zeit abwarten
+
+  if (timeClient.getEpochTime() >= shock_end_epoch) {
+    shock_finish(false);
+    return;
+  }
+
+  unsigned long now = millis();
+  bool reassert = (shock_last_assert_ms == 0 || now - shock_last_assert_ms >= SHOCK_REASSERT_MS);
+  if (reassert) {
+    shock_last_assert_ms = now;
+    if (shock_last_assert_ms == 0) shock_last_assert_ms = 1;
+    Serial.print("Schockchloren: Pumpe Stufe ");
+    Serial.print(pumpe_dosierung);
+    Serial.print(" halten, Rest ");
+    Serial.print(shock_remaining_min());
+    Serial.println(" min");
+    call_pumpe_dosierung();
+  }
+
+  bool gate_ok = pumpe_on && (!check_flow || flow);
+  if (gate_ok) {
+    if (!orp_on || reassert) chlorinator_on();
+  }
+  else if (orp_on) {
+    Serial.println("Schockchloren: kein Flow / Pumpe aus - Chlorinator pausiert");
+    chlorinator_off();
+  }
+}
+
+// Status-Box bei aktivem Schock. with_controls = true (Chlorinator-Seite):
+// zusaetzlich Abbrechen-Button bzw. Start-Formular wenn kein Schock laeuft.
+void shock_block(String &message, bool with_controls) {
+  if (!shock_active) {
+    if (!with_controls) return;
+    message += F("<form action=\"/action_page\" onsubmit=\"return confirm('Schockchloren starten? Chlorinator + Pumpe laufen die angegebenen Stunden durch, Timer und ORP-Regelung sind solange blockiert.');\">");
+    message += F("&#9762; Schockchloren: <input type=\"number\" name=\"shock_hours\" min=\"1\" max=\"");
+    message += SHOCK_MAX_HOURS;
+    message += F("\" value=\"4\" style=\"width:4em\"> h &nbsp;<input type=\"submit\" value=\"Start\"></form>");
+    return;
+  }
+
+  message += F("<div style=\"background:#629; color:#fff; padding:0.8em 1.2em; margin:0.6em auto; "
+               "border:3px solid #c3f; border-radius:0.5em; max-width:560px; "
+               "font-size:1.25em; font-weight:bold; text-align:center; "
+               "text-shadow:0 0 4px #000;\">");
+  message += F("&#9762; <span style=\"font-size:1.15em\">SCHOCKCHLOREN</span> &#9762;<br>");
+  message += F("<span style=\"font-size:0.85em; font-weight:normal\">");
+  message += shock_hours;
+  message += F(" h &mdash; Pumpe Stufe ");
+  message += pumpe_dosierung;
+  message += F(" &mdash; Timer / ORP-Regelung blockiert<br>");
+  if (!ntp_synced) {
+    message += F("warte auf NTP-Sync ...");
+  }
+  else {
+    unsigned long rem = shock_remaining_min();
+    unsigned long h = rem / 60;
+    unsigned long m = rem % 60;
+    message += F("Rest ");
+    if (h < 10) message += F("0");
+    message += h;
+    message += F(":");
+    if (m < 10) message += F("0");
+    message += m;
+    message += F(" h (bis ");
+    message += chlor_fmt_date_hhmm(shock_end_epoch);
+    message += F("), danach Verteilen");
+  }
+  if (!orp_on) message += F("<br><span style=\"color:#fc0\">Chlorinator pausiert (Pumpe aus / kein Flow)</span>");
+  message += F("</span>");
+  if (with_controls) {
+    message += F("<form action=\"/action_page\" onsubmit=\"return confirm('Schockchloren abbrechen?');\" style=\"margin-top:0.5em\">");
+    message += F("<input type=\"hidden\" name=\"shock_stop\" value=\"1\">");
+    message += F("<input type=\"submit\" value=\"Abbrechen\" style=\"background:#c00;color:white;\"></form>");
+  }
+  message += F("</div>");
+}
+
+
+// ----------------------------------------------------------------------
 //  Dispatcher (vom Loop aufgerufen)
 // ----------------------------------------------------------------------
 
@@ -551,6 +716,13 @@ void chlor_phase_run() {
     chlor_resume_done = true;
   }
   chlor_check_day_rollover();
+
+  // v7.1: Schockchloren uebersteuert die Phasen-Logik komplett
+  if (shock_active) {
+    shock_tick();
+    chlor_pump_was_on = true;   // Pumpe laeuft durch - keine Warmup-Flanke danach
+    return;
+  }
 
   // v7.2: Warmup nach JEDEM Pumpe-AN (Morgen-Start, Mittagsruhe-Wiederanlauf,
   // jede Aus->An-Flanke). Edge-Detection ueber chlor_pump_was_on. Stehendes
@@ -619,6 +791,10 @@ String chlor_fmt_date_hhmm(unsigned long epoch) {
 
 // Block fuer das Dashboard. Wird sowohl im Login- als auch im Eingeloggt-Block aufgerufen.
 void chlor_dashboard_block(String &message) {
+  if (shock_active) {
+    message += F("<span style=\"color:#c3f\">&#9762;</span> Chlor-Phase: <b>SCHOCK</b> (Regelung pausiert)<br>");
+    return;
+  }
   unsigned long now = millis();
   unsigned long elapsed_min = (now - chlor_phase_start_ms) / 60000UL;
 

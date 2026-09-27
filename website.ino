@@ -1,5 +1,5 @@
 /* *****************************************************************
-   RWS Pool-Kit v7.0
+   RWS Pool-Kit v7.1
    Copyright (c) 2022-2026 Ridewithoutstomach
    https://rws.casa-eller.de
    https://github.com/ridewithoutstomach/rwspoolkit-esp32
@@ -32,6 +32,13 @@ void handleForm() {
         String message;
         addTop(message);
         message += F("<br><h1><center><a href=\"pool.htm\" class=\"button3\">Resetted to default!</a>");
+        server.send(200, "text/html", message);
+      }
+      else if (shock_active) {
+        // v7.1: Schockchloren hat Vorrang - Manual ON erst nach Abbruch moeglich
+        String message;
+        addTop(message);
+        message += F("<br><h1><center><a href=\"/\" class=\"button3\">Schockchloren aktiv - erst abbrechen!</a>");
         server.send(200, "text/html", message);
       }
       else {
@@ -528,6 +535,38 @@ void handleForm() {
 
 
   // ---------------------------------------------Chlorinator Status-Reset (v7.1)
+  // -------------------------------------------   v7.1: Schockchloren Start / Abbruch
+  else if (server.hasArg("shock_hours")) {
+    Serial.println(" ----------------- Server.has Arg  shock_hours .-........!");
+    String message;
+    addTop(message);
+    if ( !login ) {
+      message += F("<br><h1><center><a href=\"/\" class=\"button3\">Login first!</a>");
+    }
+    else if (shock_active) {
+      message += F("<br><h1><center><a href=\"chlorinator.htm\" class=\"button3\">Schockchloren l&auml;uft bereits</a>");
+    }
+    else if (shock_start(server.arg("shock_hours").toInt())) {
+      message += F("<br><h1><center><a href=\"chlorinator.htm\" class=\"button3\">Schockchloren gestartet</a>");
+    }
+    else {
+      message += F("<br><h1><center><a href=\"chlorinator.htm\" class=\"button3\">Start abgelehnt (1-48 h, NTP n&ouml;tig)</a>");
+    }
+    server.send(200, "text/html", message);
+  }
+  else if (server.hasArg("shock_stop")) {
+    Serial.println(" ----------------- Server.has Arg  shock_stop .-........!");
+    String message;
+    addTop(message);
+    if ( login ) {
+      if (shock_active) shock_finish(true);
+      message += F("<br><h1><center><a href=\"chlorinator.htm\" class=\"button3\">Schockchloren abgebrochen</a>");
+    }
+    else {
+      message += F("<br><h1><center><a href=\"/\" class=\"button3\">Login first!</a>");
+    }
+    server.send(200, "text/html", message);
+  }
   else if (server.hasArg("chlor_status_reset")) {
     Serial.println(" ----------------- Server.has Arg  chlor_status_reset .-........!");
     if ( login ) {
@@ -916,7 +955,7 @@ void handleRoot() {
                    "<link rel='stylesheet' type='text/css' href='/style.css'>\n"
                    "</head>\n");
       message += F("<body>\n");
-      message += F("<header>\n<h1>RWS Pool-KIT (V7.0)</h1>\n</header>\n<main>\n");
+      message += F("<header>\n<h1>RWS Pool-KIT (V7.1)</h1>\n</header>\n<main>\n");
       message += F("<h2><center>WiFi Konfiguration</h2>");
       message += F("<center><form method='POST' action='/wifisave'><table>");
 
@@ -957,13 +996,13 @@ void handleRoot() {
       message =  F("<!DOCTYPE html>\n"
                    "<html lang='en'>\n"
                    "<head>\n"
-                   "<title>RWS POOL-Kit V7.0</title>\n"
+                   "<title>RWS POOL-Kit V7.1</title>\n"
                    "<meta http-equiv=\"content-type\" content=\"text/html; charset=utf-8\">\n"
                    "<meta name=\"viewport\" content=\"width=device-width\">\n"
                    "<link rel='stylesheet' type='text/css' href='/style.css'>\n"
                    "</head>\n");
       message += F("<body>\n");
-      message += F("<header>\n<h1><center>RWS Pool-Kit V7.0</center></h1>\n"
+      message += F("<header>\n<h1><center>RWS Pool-Kit V7.1</center></h1>\n"
                    "<nav><p></p></nav>\n</header>\n"
                    "<main>\n");
       message += F("<h2><center>Login!</h2>");
@@ -1021,6 +1060,8 @@ void handleRoot() {
 
       // v7.0: Manual-Pump-ON Status (gibt nichts aus wenn nicht aktiv)
       pump_manual_dashboard_block(message);
+      // v7.1: Schockchloren-Status (nur wenn aktiv)
+      shock_block(message, false);
 
       // Counter direkt nach Humidity - eigene Zeilen
       message += (check_phminus ? F("<span style=\"color:#0c0\">&#x2714;</span> ") : F("<span style=\"color:#c00\">&#x2716;</span> "));
@@ -1109,6 +1150,8 @@ void handleRoot() {
 
     // v7.0: Manual-Pump-ON Status (gibt nichts aus wenn nicht aktiv)
     pump_manual_dashboard_block(message);
+    // v7.1: Schockchloren-Status (nur wenn aktiv, Bedienung auf Chlorinator-Seite)
+    shock_block(message, false);
 
     // Counter direkt nach Humidity - eigene Zeilen
     message += (check_phminus ? F("<span style=\"color:#0c0\">&#x2714;</span> ") : F("<span style=\"color:#c00\">&#x2716;</span> "));
@@ -1241,7 +1284,7 @@ void addTop(String &message)
                "<link rel='stylesheet' type='text/css' href='/style.css'>\n"
                "</head>\n");
   message += F("<body>\n");
-  message += F("<header>\n<h1>RWS Pool-KIT (V7.0)</h1>\n"
+  message += F("<header>\n<h1>RWS Pool-KIT (V7.1)</h1>\n"
                "<nav><center><p>"
                "<a href=\"/\" class=\"button3\">Dashboard</a>"
                "<a href=\"pool.htm\" class=\"button3\">Pool&Pump</a>"
@@ -1275,7 +1318,7 @@ void addTop2(String &message)
                "<link rel='stylesheet' type='text/css' href='/style.css'>\n"
                "</head>\n");
   message += F("<body>\n");
-  message += F("<header>\n<h1>RWS Pool-KIT (V7.0)</h1>\n"
+  message += F("<header>\n<h1>RWS Pool-KIT (V7.1)</h1>\n"
                "</center><main>\n");
 }
 
@@ -1284,7 +1327,7 @@ void addBottom(String &message) {
   message += F("</main>\n"
                "<footer>\n<p>");
   message += F("<span id='min'>");
-  message += ("&nbsp; RWS Pool-KIT V7.0 - (c)2021-2026 Bernd Eller <br>");
+  message += ("&nbsp; RWS Pool-KIT V7.1 - (c)2021-2026 Bernd Eller <br>");
   message += ("&nbsp; uptime: ");
   message += uptime_formatter::getUptime();
   server.send(200, "text/html", message);

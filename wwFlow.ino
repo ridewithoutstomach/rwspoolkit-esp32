@@ -1,5 +1,5 @@
 /* *****************************************************************
-   RWS Pool-Kit v7.0
+   RWS Pool-Kit v7.1
    Copyright (c) 2022-2026 Ridewithoutstomach
    https://rws.casa-eller.de
    https://github.com/ridewithoutstomach/rwspoolkit-esp32

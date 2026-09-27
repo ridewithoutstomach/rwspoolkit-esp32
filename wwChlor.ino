@@ -1,5 +1,5 @@
 /* *****************************************************************
-   RWS Pool-Kit v7.0
+   RWS Pool-Kit v7.1
    Copyright (c) 2022-2026 Ridewithoutstomach
    https://rws.casa-eller.de
    https://github.com/ridewithoutstomach/rwspoolkit-esp32
@@ -42,11 +42,16 @@ String message;
 
   message += F("<h2>Chlorinator</h2>");
   message += F("<b><em>Attention! -> Please read the Manual <- Attention!</em></b><br><br>");
-  message += F("<small><b>v7.0 phase logic:</b> Observe -> Dose -> Distribute -> Observe<br>");
+  message += F("<small><b>Phase logic:</b> Observe -> Dose -> Distribute -> Observe<br>");
   message += F("Distribute time covers the hydraulic dead time between chlorinator output and ORP probe.<br>");
   message += F("During Dose and Distribute the pump is forced to <b>Pump Dosage Output</b>.<br><br>");
   message += F("<b>Attention: ORP is only evaluated as a trigger while the pump is ON!</b></small><br><br>");
 
+
+  // Schockchloren: Start-Formular bzw. Status + Abbrechen
+  message += F("<center>");
+  shock_block(message, true);
+  message += F("</center><br>");
 
   message += F("<center><table><tr>");
   message += F("<td>&nbsp;Activate Chlorinator: &nbsp;</td>");
@@ -142,9 +147,9 @@ String message;
   message += F("<p><b>Double-Checks</b><br>Anzahl aufeinanderfolgender Messungen unter ORP-Min, bevor Chloren ausgel&ouml;st wird. Default 10. Filter gegen kurze Schwankungen.</p>");
   message += F("<p><b>Pulsetime (min)</b><br>Maximale Dauer einer Chloren-Phase. Default 30.</p>");
 
-  message += F("<p><b>Distribute time (min)</b> &mdash; <em>NEU</em><br>Pflichtpause nach Chloren. Default 240. In dieser Zeit wird der Chlorinator nicht erneut eingeschaltet. Soll l&auml;nger sein als die hydraulische Totzeit zwischen D&uuml;se und Sonde &mdash; bei 42 m&sup3; und 11 m&sup3;/h Pumpe ca. 4 h f&uuml;r eine Beckenrunde. Nach Ablauf geht das System zur&uuml;ck in Beobachten und der Double-Checks-Counter entscheidet wie sonst auch &uuml;ber einen neuen Zyklus.</p>");
+  message += F("<p><b>Distribute time (min)</b><br>Pflichtpause nach Chloren. Default 240. In dieser Zeit wird der Chlorinator nicht erneut eingeschaltet. Soll l&auml;nger sein als die hydraulische Totzeit zwischen D&uuml;se und Sonde &mdash; bei 42 m&sup3; und 11 m&sup3;/h Pumpe ca. 4 h f&uuml;r eine Beckenrunde. Nach Ablauf geht das System zur&uuml;ck in Beobachten und der Double-Checks-Counter entscheidet wie sonst auch &uuml;ber einen neuen Zyklus.</p>");
 
-  message += F("<p><b>Daily budget</b> &mdash; <em>NEU</em><br>Maximale Chlor-Phasen pro Tag (0 = unbegrenzt). Begrenzt die Tagesdosis hart. Sinnvoll f&uuml;r:</p>");
+  message += F("<p><b>Daily budget</b><br>Maximale Chlor-Phasen pro Tag (0 = unbegrenzt). Begrenzt die Tagesdosis hart. Sinnvoll f&uuml;r:</p>");
   message += F("<ul>");
   message += F("<li>Tageszehrung deckeln (wenn der Bedarf bekannt ist)</li>");
   message += F("<li>Schutz bei Sondenfehler oder Fehlkonfig</li>");
@@ -153,11 +158,18 @@ String message;
   message += F("</ul>");
   message += F("<p>Bei ersch&ouml;pftem Budget misst das System weiter, zeigt &quot;Budget ersch&ouml;pft&quot; im Dashboard, l&ouml;st aber bis Mitternacht keine neue Phase aus. Reset um 0:00 Uhr.</p>");
 
-  message += F("<p><b>Safety stop</b> &mdash; <em>NEU</em><br>Bei &quot;Yes&quot; wird die laufende Chloren-Phase sofort abgebrochen, wenn der ORP &uuml;ber ORP-Max steigt. Schutz gegen &Uuml;berdosierung.</p>");
+  message += F("<p><b>Safety stop</b><br>Bei &quot;Yes&quot; wird die laufende Chloren-Phase sofort abgebrochen, wenn der ORP &uuml;ber ORP-Max steigt. Schutz gegen &Uuml;berdosierung.</p>");
 
-  message += F("<p><b>Warmup time</b> &mdash; <em>NEU</em><br>Sperrzeit nach dem <b>ersten</b> Pumpen-AN des Tages. In dieser Zeit misst die Sonde zwar weiter, wertet aber nicht aus &mdash; nach Stillstand ist die ORP-Sonde noch nicht eingependelt und w&uuml;rde sonst auf einen Phantom-Tiefstand reagieren. Wird auch nach Reboot einmal angewendet. Mittags-Pause z&auml;hlt nicht (Pumpe geht nur kurz aus, Wasser hat sich nicht beruhigt). Default 15 min, 0 = aus. Beim Pumpen-AN wird der ORP-Counter gleichzeitig zur&uuml;ckgesetzt &mdash; falls sich das Wasser &uuml;ber Nacht beruhigt hat, soll keine Vor-Last aus dem Vortag durchschlagen.</p>");
+  message += F("<p><b>Warmup time</b><br>Sperrzeit nach dem <b>ersten</b> Pumpen-AN des Tages. In dieser Zeit misst die Sonde zwar weiter, wertet aber nicht aus &mdash; nach Stillstand ist die ORP-Sonde noch nicht eingependelt und w&uuml;rde sonst auf einen Phantom-Tiefstand reagieren. Wird auch nach Reboot einmal angewendet. Mittags-Pause z&auml;hlt nicht (Pumpe geht nur kurz aus, Wasser hat sich nicht beruhigt). Default 15 min, 0 = aus. Beim Pumpen-AN wird der ORP-Counter gleichzeitig zur&uuml;ckgesetzt &mdash; falls sich das Wasser &uuml;ber Nacht beruhigt hat, soll keine Vor-Last aus dem Vortag durchschlagen.</p>");
 
-  message += F("<p><b>Nacht-Deadline</b> (automatisch aus Pumpen-Timer) &mdash; <em>NEU</em><br>Das System kennt die <b>letzte Aus-Anweisung</b> deines Pumpen-Timers (sp&auml;tester aktiver Slot mit Speed=1 heute) und beachtet sie. Reicht die Zeit bis dahin nicht f&uuml;r eine komplette Chloren-Phase plus 5 min Sp&uuml;lung (= Pulsetime + 5), wird kein neuer Zyklus mehr gestartet. L&auml;uft gerade ein Zyklus und die Pumpe geht in &lt;5 min aus, wird der Chlorinator sofort abgeschaltet, DISTRIBUTE &uuml;bersprungen, und die Pumpe an den Timer zur&uuml;ckgegeben &mdash; die letzten Pumpenminuten wirken als Sp&uuml;lung. Mittags-Aus-Slots, die der Chlor sowieso durchfeuert, werden ignoriert.</p>");
+  message += F("<p><b>Nacht-Deadline</b> (automatisch aus Pumpen-Timer)<br>Das System kennt die <b>letzte Aus-Anweisung</b> deines Pumpen-Timers (sp&auml;tester aktiver Slot mit Speed=1 heute) und beachtet sie. Reicht die Zeit bis dahin nicht f&uuml;r eine komplette Chloren-Phase plus 5 min Sp&uuml;lung (= Pulsetime + 5), wird kein neuer Zyklus mehr gestartet. L&auml;uft gerade ein Zyklus und die Pumpe geht in &lt;5 min aus, wird der Chlorinator sofort abgeschaltet, DISTRIBUTE &uuml;bersprungen, und die Pumpe an den Timer zur&uuml;ckgegeben &mdash; die letzten Pumpenminuten wirken als Sp&uuml;lung. Mittags-Aus-Slots, die der Chlor sowieso durchfeuert, werden ignoriert.</p>");
+
+  message += F("<h3>Schockchloren</h3>");
+  message += F("<p>Start oben auf dieser Seite: Stunden eingeben, <i>Start</i>. F&uuml;r die ganze Dauer l&auml;uft der Chlorinator durch, ");
+  message += F("die Pumpe steht fest auf <b>Pump Dosage Output</b>. Timer, Winter-Modus, Manual Pump ON, ORP-Regelung, Safety stop, Nacht-Deadline und Daily budget sind solange au&szlig;er Kraft. ");
+  message += F("PH-Minus regelt normal weiter. Ist das Flow-Gate aktiv, wird nur der Chlorinator bei fehlendem Flow pausiert &mdash; die Schock-Zeit l&auml;uft weiter. ");
+  message += F("Nach Ablauf folgt eine komplette <b>VERTEILEN</b>-Phase (Distribute time, auch nachts), danach &uuml;bernimmt der Timer. ");
+  message += F("<i>Abbrechen</i> schaltet sofort ab und gibt die Pumpe direkt an den Timer zur&uuml;ck. Ein Reboot setzt den Schock mit der Restzeit fort. Max. 48 h.</p>");
 
   message += F("<h3>Woran drehen bei welchem Problem?</h3>");
   message += F("<p><b>System reagiert zu sp&auml;t:</b><br>&rarr; Double-Checks reduzieren oder ORP-Min erh&ouml;hen.</p>");

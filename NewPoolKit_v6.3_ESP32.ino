@@ -1,5 +1,5 @@
 /* *****************************************************************
-   RWS Pool-Kit v7.0
+   RWS Pool-Kit v7.1
    Copyright (c) 2022-2026 Ridewithoutstomach
    https://rws.casa-eller.de
    https://github.com/ridewithoutstomach/rwspoolkit-esp32
@@ -221,6 +221,18 @@ uint16_t chlor_today_count = 0;               // Anzahl Chlor-Phasen heute
 int      chlor_today_day   = -1;              // letzter timeClient.getDay() fuer Mitternachtsreset
 int      chlor_last_start_minute = -1;        // minute_of_day des letzten Chloren-Starts (-1 = noch keiner)
 unsigned long chlor_last_start_epoch = 0;     // Unix-Timestamp des letzten Chloren-Starts (fuer Datum-Anzeige nach Tageswechsel)
+
+// v7.1: Schockchloren - Chlorinator + Pumpe (Dosier-Stufe) fuer X Stunden erzwingen.
+// Blockiert Timer, Winter, Manual, Chlor-Phasen, Nacht-Deadline und ORP-Safety-Stop.
+// PH-Minus regelt normal weiter. Flow-Gate (falls aktiv) pausiert nur den Chlorinator.
+// Danach VERTEILEN (ohne Nacht-Deadline), dann BEOBACHTEN.
+#define SHOCK_MAX_HOURS   48
+#define SHOCK_REASSERT_MS (10UL * 60UL * 1000UL)   // Pumpe + Chlorinator alle 10 min erneut schalten
+bool          shock_active          = false;
+uint16_t      shock_hours           = 0;      // angeforderte Dauer (nur Anzeige)
+unsigned long shock_end_epoch       = 0;      // Unix-Timestamp Schock-Ende (persistent fuer Reboot-Resume)
+unsigned long shock_last_assert_ms  = 0;      // 0 = beim naechsten Tick sofort schalten
+bool          shock_post_distribute = false;  // VERTEILEN nach Schock ignoriert Nacht-Deadline
 
 bool check_phminus = false;
 char phminus_dblchk[15] {"4"};
@@ -500,7 +512,7 @@ read_alive();
 
 // v6.0: polling is always on
 polling = true;
-Serial.println("v6.3: polling=TRUE (always on)");
+Serial.println("v7.1: polling=TRUE (always on)");
 
 
 
@@ -729,7 +741,7 @@ void loop() {
   if (millis() - debug_last_print >= 10000) {
     debug_last_print = millis();
     Serial.println("");
-    Serial.println("--- v6.3 LOOP ---");
+    Serial.println("--- v7.1 LOOP ---");
     Serial.print("polling=TRUE");
     Serial.print(" ph_fault_counter=");
     Serial.print(ph_fault_counter);
@@ -763,7 +775,7 @@ void loop() {
     Serial.print("C Humidity=");
     Serial.print(dht_hum(), 1);
     Serial.println("%");
-    Serial.println("--- v6.3 LOOP END ---");
+    Serial.println("--- v7.1 LOOP END ---");
   }
 
   if (polling == true) {                 //if polling is turned on, run the sequencer
@@ -833,7 +845,8 @@ void loop() {
      
       //##
       // v7.0: Phasen-State-Machine, eigenes Throttling pro Phase intern
-      if ( check_chlorinator ){
+      // v7.1: Schockchloren + Verteilen danach laufen auch bei deaktiviertem Chlorinator
+      if ( check_chlorinator || shock_active || chlor_phase == CHLOR_PHASE_DISTRIBUTE ){
          chlor_phase_run();
       }
       //##

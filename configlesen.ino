@@ -1,5 +1,5 @@
 /* *****************************************************************
-   RWS Pool-Kit v7.0
+   RWS Pool-Kit v7.1
    Copyright (c) 2022-2026 Ridewithoutstomach
    https://rws.casa-eller.de
    https://github.com/ridewithoutstomach/rwspoolkit-esp32
@@ -208,6 +208,11 @@ void write_chlorinator(){
         file.write(reinterpret_cast<uint8_t*>(&chlor_warmup_min),         sizeof(chlor_warmup_min));
         // Zeitstempel des letzten Chloren-Starts (fuer Datum-Anzeige nach Tageswechsel)
         file.write(reinterpret_cast<uint8_t*>(&chlor_last_start_epoch),   sizeof(chlor_last_start_epoch));
+        // v7.1: Schockchloren (Reboot-Resume)
+        file.write(reinterpret_cast<uint8_t*>(&shock_active),             sizeof(shock_active));
+        file.write(reinterpret_cast<uint8_t*>(&shock_hours),              sizeof(shock_hours));
+        file.write(reinterpret_cast<uint8_t*>(&shock_end_epoch),          sizeof(shock_end_epoch));
+        file.write(reinterpret_cast<uint8_t*>(&shock_post_distribute),    sizeof(shock_post_distribute));
         file.close();
 
 }
@@ -248,6 +253,15 @@ void read_chlorinator(){
         // Zeitstempel des letzten Chloren-Starts
         if (file.available() >= (int)sizeof(chlor_last_start_epoch))
           file.read(reinterpret_cast<uint8_t*>(&chlor_last_start_epoch),   sizeof(chlor_last_start_epoch));
+        // v7.1: Schockchloren
+        if (file.available() >= (int)sizeof(shock_active))
+          file.read(reinterpret_cast<uint8_t*>(&shock_active),             sizeof(shock_active));
+        if (file.available() >= (int)sizeof(shock_hours))
+          file.read(reinterpret_cast<uint8_t*>(&shock_hours),              sizeof(shock_hours));
+        if (file.available() >= (int)sizeof(shock_end_epoch))
+          file.read(reinterpret_cast<uint8_t*>(&shock_end_epoch),          sizeof(shock_end_epoch));
+        if (file.available() >= (int)sizeof(shock_post_distribute))
+          file.read(reinterpret_cast<uint8_t*>(&shock_post_distribute),    sizeof(shock_post_distribute));
         file.close();
         orp_chk_counter_read = orp_chk_counter;
 
