@@ -1,5 +1,5 @@
 /* *****************************************************************
-   RWS Pool-Kit v6.3
+   RWS Pool-Kit v7.0
    Copyright (c) 2022-2026 Ridewithoutstomach
    https://rws.casa-eller.de
    https://github.com/ridewithoutstomach/rwspoolkit-esp32
@@ -142,6 +142,13 @@ char pumpe_hand[13] {"1"};
 String check_pump_on = "";
 String check_pump_off = "checked";
 
+// v7.0: Manual-Pump-ON Override - friert Pumpenstufe auf pumpe_hand ein,
+// blockiert alle anderen Pumpen-Stufenwechsel (Timer, Winter, Chlor-Force, PH-Force).
+// Automatisches Fallback nach 24h.
+bool pump_manual_on = false;
+unsigned long pump_manual_start_ms = 0;
+#define PUMP_MANUAL_TIMEOUT_MS (24UL * 60UL * 60UL * 1000UL)   // 24h
+
 bool winter_modus = false;
 char pumpe_temp[13] {"1"};
 char winter_temp[13] {"2"};
@@ -169,16 +176,51 @@ char hostname_flowcontrol[60] {"flowcontrol_shelly"};
 char password_flowcontrol[60] {""};
 const char* datei_flow = "/flow.cfg";
 
+// Alive: periodischer Heartbeat an Tasmota -> /cm?cmnd=Event%20alive
+bool check_alive = false;
+char alive_interval[14] {"5"};        // Minuten
+char hostname_alive[60] {""};
+const char* datei_alive = "/alive.cfg";
+unsigned long previousMillis_alive = 0;
+unsigned long alive_fail_time = 0;
+
 bool check_chlorinator = false;
 unsigned int orp_chk_counter = 0;
 unsigned int orp_chk_counter_read = 0;
-char orp_dblchk[16] {"15"}; 
+char orp_dblchk[16] {"15"};
 char check_orp_interval_delay[15] {"20"};            // Sekunden!!  - muss umgerechnet werden
 //char check_orp_interval_delay_std[15] {"20"};            // Sekunden!!  - muss umgerechnet werden
-char ChlorInterval[15] {"30"};                      // minuten
-unsigned int ChlorInterval_counter = 0;
+char ChlorInterval[15] {"30"};                      // minuten - Pulsetime / Max-Dauer Chloren-Phase
 char hostname_chlorinator[60] {"chlorinator_shelly"};
 const char* datei_chlorinator = "/chlorinator.cfg";
+
+// v7.0: Phasen-basierte Chlorinator-Steuerung
+// Phasen: BEOBACHTEN -> CHLOREN -> VERTEILEN -> BEOBACHTEN
+#define CHLOR_PHASE_OBSERVE    0
+#define CHLOR_PHASE_DOSE       1
+#define CHLOR_PHASE_DISTRIBUTE 2
+
+uint8_t chlor_phase = CHLOR_PHASE_OBSERVE;
+unsigned long chlor_phase_start_ms    = 0;    // millis() beim Phasen-Eintritt (Laufzeit-Anker)
+unsigned long chlor_phase_start_epoch = 0;    // Unix-Timestamp beim Phasen-Eintritt (persistent fuer Reboot-Resume)
+unsigned long chlor_last_tick_ms      = 0;    // throttle fuer Beobachten-Messintervall
+bool          chlor_resume_done       = false; // Reboot-Resume nur einmal nach NTP-Sync ausfuehren
+
+// Konfig
+char chlor_distribute_min[15] {"240"};        // Verteilen-Dauer in Minuten
+char chlor_daily_budget[10]   {"0"};          // max Chlor-Phasen pro Tag (0 = aus)
+bool chlor_safety_stop = true;                // Sicherheitsabbruch bei ORP >= ORP_Max in Chloren-Phase
+
+// v7.2: Warmup nach jedem Pumpe-AN (Morgen-Start, Mittagsruhe-Wiederanlauf, etc.)
+char          chlor_warmup_min[10]   {"15"};  // Minuten Warmup (0 = aus)
+unsigned long pump_warmup_start_ms   = 0;     // millis() bei Warmup-Start, 0 = inaktiv
+bool          chlor_pump_was_on      = false; // letzter Pumpe-AN-Zustand (Edge-Detection fuer Warmup)
+
+// Tagesbudget / Statistik
+uint16_t chlor_today_count = 0;               // Anzahl Chlor-Phasen heute
+int      chlor_today_day   = -1;              // letzter timeClient.getDay() fuer Mitternachtsreset
+int      chlor_last_start_minute = -1;        // minute_of_day des letzten Chloren-Starts (-1 = noch keiner)
+unsigned long chlor_last_start_epoch = 0;     // Unix-Timestamp des letzten Chloren-Starts (fuer Datum-Anzeige nach Tageswechsel)
 
 bool check_phminus = false;
 char phminus_dblchk[15] {"4"};
@@ -265,17 +307,14 @@ String oops = "1";      // ->  wenn 1 dann haben wir eine Mehrkanal Pumpe und sc
                         // -> wenn 0 dann haben wir eine normale Pumpe und schalten any Device ON/Off
 
 
-int chlor_hyst = 0;  // wird benötigt um den chlorinator innerhalb der Werte ORP einzuschalten:
 //int temp_hyst = 0;
 
 
 // Zeiten  1min=60000 15min=900.000  30min=1.800.000
-unsigned long previousMillis = 0;  // brauch ich für die Pumpensteuerung 
-unsigned long previousMillisFlow = 0;  // brauch ich für die Flowteuerung 
-unsigned long previousMillis_check_ORP = 0;  
-unsigned long previousMillis_thingspeak = 0; 
-unsigned long previousMillis_phminus = 0;  
-unsigned long previousMillisChlorInterval = 0;
+unsigned long previousMillis = 0;  // brauch ich für die Pumpensteuerung
+unsigned long previousMillisFlow = 0;  // brauch ich für die Flowteuerung
+unsigned long previousMillis_thingspeak = 0;
+unsigned long previousMillis_phminus = 0;
 unsigned long previousMillis_check_heater = 0;
 unsigned long previousMillis_check_humidity = 0;
 
@@ -443,12 +482,21 @@ thingspeak_stored = send_to_thingspeak;
 read_pool();
 read_flow();
 read_chlorinator();
+// v7.1: Phasen-State wird jetzt persistiert. read_chlorinator() laedt
+// chlor_phase, chlor_phase_start_epoch, chlor_today_count, chlor_today_day,
+// chlor_last_start_minute und orp_chk_counter aus der Datei (sofern vorhanden).
+// Der eigentliche Resume in die richtige Phase passiert in chlor_resume_after_boot(),
+// sobald NTP synchronisiert ist (gerufen aus chlor_phase_run()).
+chlor_phase_start_ms = millis();      // Laufzeit-Anker neu, Resume korrigiert ihn ggf. spaeter
+chlor_last_tick_ms   = 0;
+chlor_resume_done    = false;
 read_phminuspmp();
 ph_filter_recalc_size();   // PH-Filter Ringpuffer aus geladenen Settings dimensionieren
 read_dht_cal();   // v6.1: AM2315C Offset laden
 init_timers();    // v6.0: Defaults setzen bevor Config geladen wird
 read_timer();
 read_heater();
+read_alive();
 
 // v6.0: polling is always on
 polling = true;
@@ -476,9 +524,10 @@ if ( summer == true ){
   Serial.println("Summertime");
 }
 else{
-  utcOffsetInSeconds = 3600;  
+  utcOffsetInSeconds = 3600;
   Serial.println("Wintertime");
 }
+timeClient.setTimeOffset(utcOffsetInSeconds);
 
 // haben wir eine 3Speed Pumpe ?
 
@@ -513,6 +562,7 @@ if ( only_one_pump_speed == true ){
   server.on("/chlorinator.htm", handlePageChlor);
   server.on("/phminus.htm", handlePagePHMinusPMP);
   server.on("/heater.htm", handlePageHeizung);
+  server.on("/alive.htm", handlePageAlive);
   server.on("/timer.htm", handlePageTimer);
   // server.on("/stats.htm", handleStats);  // v6.0: Stats entfernt (identisch mit Dashboard)
   server.on("/calibration.htm", handleCal);
@@ -723,6 +773,9 @@ void loop() {
   // END EZO #######################################################################################
   Timer_seq.run();
 
+  // v7.0: Manual-Pump-ON 24h-Timeout pruefen (kein Aufwand wenn nicht aktiv)
+  pump_manual_tick();
+
   
   // Flow-Shelly wird gepollt wenn entweder der Dashboard-Show-Schalter
   // oder der Dosier-Gate-Schalter aktiv ist. Sonst kein HTTP-Traffic.
@@ -778,13 +831,10 @@ void loop() {
 
 
      
-      //##    
+      //##
+      // v7.0: Phasen-State-Machine, eigenes Throttling pro Phase intern
       if ( check_chlorinator ){
-         currentMillis = millis();
-         if (currentMillis - previousMillis_check_ORP >= atol(check_orp_interval_delay) * 1000) { 
-             previousMillis_check_ORP = millis();
-              check_orp(); 
-         }
+         chlor_phase_run();
       }
       //##
 
@@ -829,6 +879,18 @@ void loop() {
            humidity_hyst = 0;
         }
        // ##
+
+      // ## Alive-Heartbeat
+      if ( check_alive ){
+         unsigned long iv_min = (unsigned long)atol(alive_interval);
+         if (iv_min < 1) iv_min = 1;
+         currentMillis = millis();
+         if (currentMillis - previousMillis_alive >= iv_min * 60UL * 1000UL) {
+             previousMillis_alive = currentMillis;
+             send_alive();
+         }
+      }
+      // ##
       
 
       

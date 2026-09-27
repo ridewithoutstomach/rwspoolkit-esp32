@@ -1,5 +1,5 @@
 /* *****************************************************************
-   RWS Pool-Kit v6.3
+   RWS Pool-Kit v7.0
    Copyright (c) 2022-2026 Ridewithoutstomach
    https://rws.casa-eller.de
    https://github.com/ridewithoutstomach/rwspoolkit-esp32
@@ -81,7 +81,12 @@ void timer(){
         Serial.println("");
         Serial.print("WinterTemp unterschritten");
         Serial.println("");
-             if (!cached_connect(hostname_pumpe, 80, pumpe_fail_time)) {
+             // v7.0: Manual-Pump-ON friert Pumpenstufe ein
+             if (pump_manual_on) {
+                 Serial.println("Winter pump call blocked: Manual ON aktiv");
+                 zeit_on = true;
+             }
+             else if (!cached_connect(hostname_pumpe, 80, pumpe_fail_time)) {
                  Serial.println("connection failed");
              }
              else{
@@ -135,16 +140,8 @@ void timer2(){
       Serial.println("WARNUNG: NTP noch nicht synchronisiert - Timer laeuft mit 0:00");
     }
 
-    // Umrechnung UTC Zeit in minute_of_day
-    int minute_of_day;
-    if ( summer == true ){
-       minute_of_day = (timeClient.getHours() * 60 + timeClient.getMinutes() + 60);
-    }
-    else{
-       minute_of_day = (timeClient.getHours() * 60 + timeClient.getMinutes());
-    }
-    // Mitternachts-Korrektur (Sommerzeit kann ueber 1440 gehen)
-    if (minute_of_day >= 1440) minute_of_day -= 1440;
+    // Umrechnung aktuelle Zeit in minute_of_day
+    int minute_of_day = (timeClient.getHours() * 60 + timeClient.getMinutes());
 
     Serial.print("minute_of_day = ");
     Serial.println(minute_of_day);
@@ -195,7 +192,18 @@ void timer2(){
       Serial.print(best_time % 60);
       Serial.println(") ******");
 
-      if (!cached_connect(hostname_pumpe, 80, pumpe_fail_time)) {
+      // v7.0: Manual-Pump-ON friert Pumpenstufe ein
+      if (pump_manual_on) {
+        Serial.println("Timer pump call blocked: Manual ON aktiv");
+        zeit_on = true;
+      }
+      // Speed 1 = Pumpe AUS (Power1 ist der Aus-Kanal am CH4 Sonoff). Faellt
+      // unten in den else-Zweig, der pumpe_on=false setzt und call_pumpe_aus()
+      // ruft - sonst denkt die Chlor-/PH-Logik faelschlich, die Pumpe laufe.
+      else if (best_speed == 1) {
+        Serial.println("Speed 1 -> Pumpe AUS (via call_pumpe_aus)");
+      }
+      else if (!cached_connect(hostname_pumpe, 80, pumpe_fail_time)) {
         Serial.println("connection failed");
       }
       else {

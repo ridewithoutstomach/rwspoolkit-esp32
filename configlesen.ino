@@ -1,5 +1,5 @@
 /* *****************************************************************
-   RWS Pool-Kit v6.3
+   RWS Pool-Kit v7.0
    Copyright (c) 2022-2026 Ridewithoutstomach
    https://rws.casa-eller.de
    https://github.com/ridewithoutstomach/rwspoolkit-esp32
@@ -183,7 +183,7 @@ void read_flow(){
 }
 
 void write_chlorinator(){
- 
+
         Serial.println("Write Chlorinator");
         File file = LittleFS.open(datei_chlorinator, "w");
         if (!file) { Serial.println("LittleFS write error: chlorinator"); return; }
@@ -194,8 +194,22 @@ void write_chlorinator(){
         file.write(reinterpret_cast<uint8_t*>(&orp_dblchk), sizeof(orp_dblchk));
         file.write(reinterpret_cast<uint8_t*>(&orp_chk_counter), sizeof(orp_chk_counter));
         file.write(reinterpret_cast<uint8_t*>(&ChlorInterval), sizeof(ChlorInterval));
+        // v7.0: neue Phasen-Parameter
+        file.write(reinterpret_cast<uint8_t*>(&chlor_distribute_min), sizeof(chlor_distribute_min));
+        file.write(reinterpret_cast<uint8_t*>(&chlor_daily_budget),   sizeof(chlor_daily_budget));
+        file.write(reinterpret_cast<uint8_t*>(&chlor_safety_stop),    sizeof(chlor_safety_stop));
+        // v7.1: Phasen-State persistieren fuer Reboot-Resume
+        file.write(reinterpret_cast<uint8_t*>(&chlor_phase),              sizeof(chlor_phase));
+        file.write(reinterpret_cast<uint8_t*>(&chlor_phase_start_epoch),  sizeof(chlor_phase_start_epoch));
+        file.write(reinterpret_cast<uint8_t*>(&chlor_today_count),        sizeof(chlor_today_count));
+        file.write(reinterpret_cast<uint8_t*>(&chlor_today_day),          sizeof(chlor_today_day));
+        file.write(reinterpret_cast<uint8_t*>(&chlor_last_start_minute),  sizeof(chlor_last_start_minute));
+        // v7.2: Morgens-Warmup
+        file.write(reinterpret_cast<uint8_t*>(&chlor_warmup_min),         sizeof(chlor_warmup_min));
+        // Zeitstempel des letzten Chloren-Starts (fuer Datum-Anzeige nach Tageswechsel)
+        file.write(reinterpret_cast<uint8_t*>(&chlor_last_start_epoch),   sizeof(chlor_last_start_epoch));
         file.close();
-   
+
 }
 
 
@@ -210,12 +224,44 @@ void read_chlorinator(){
         file.read(reinterpret_cast<uint8_t*>(&orp_dblchk), sizeof(orp_dblchk));
         file.read(reinterpret_cast<uint8_t*>(&orp_chk_counter), sizeof(orp_chk_counter));
         file.read(reinterpret_cast<uint8_t*>(&ChlorInterval), sizeof(ChlorInterval));
+        // v7.0: neue Phasen-Parameter, optional fuer Backwards-Kompatibilitaet
+        if (file.available() >= (int)sizeof(chlor_distribute_min))
+          file.read(reinterpret_cast<uint8_t*>(&chlor_distribute_min), sizeof(chlor_distribute_min));
+        if (file.available() >= (int)sizeof(chlor_daily_budget))
+          file.read(reinterpret_cast<uint8_t*>(&chlor_daily_budget),   sizeof(chlor_daily_budget));
+        if (file.available() >= (int)sizeof(chlor_safety_stop))
+          file.read(reinterpret_cast<uint8_t*>(&chlor_safety_stop),    sizeof(chlor_safety_stop));
+        // v7.1: Phasen-State (Reboot-Resume), ebenfalls optional
+        if (file.available() >= (int)sizeof(chlor_phase))
+          file.read(reinterpret_cast<uint8_t*>(&chlor_phase),              sizeof(chlor_phase));
+        if (file.available() >= (int)sizeof(chlor_phase_start_epoch))
+          file.read(reinterpret_cast<uint8_t*>(&chlor_phase_start_epoch),  sizeof(chlor_phase_start_epoch));
+        if (file.available() >= (int)sizeof(chlor_today_count))
+          file.read(reinterpret_cast<uint8_t*>(&chlor_today_count),        sizeof(chlor_today_count));
+        if (file.available() >= (int)sizeof(chlor_today_day))
+          file.read(reinterpret_cast<uint8_t*>(&chlor_today_day),          sizeof(chlor_today_day));
+        if (file.available() >= (int)sizeof(chlor_last_start_minute))
+          file.read(reinterpret_cast<uint8_t*>(&chlor_last_start_minute),  sizeof(chlor_last_start_minute));
+        // v7.2: Morgens-Warmup
+        if (file.available() >= (int)sizeof(chlor_warmup_min))
+          file.read(reinterpret_cast<uint8_t*>(&chlor_warmup_min),         sizeof(chlor_warmup_min));
+        // Zeitstempel des letzten Chloren-Starts
+        if (file.available() >= (int)sizeof(chlor_last_start_epoch))
+          file.read(reinterpret_cast<uint8_t*>(&chlor_last_start_epoch),   sizeof(chlor_last_start_epoch));
         file.close();
-        //strcpy(check_orp_interval_delay_std, check_orp_interval_delay);
         orp_chk_counter_read = orp_chk_counter;
-       
 
-  }                  
+        Serial.print("  Chlor State geladen: phase=");
+        Serial.print(chlor_phase);
+        Serial.print(" start_epoch=");
+        Serial.print(chlor_phase_start_epoch);
+        Serial.print(" today=");
+        Serial.print(chlor_today_count);
+        Serial.print(" day=");
+        Serial.print(chlor_today_day);
+        Serial.print(" last_min=");
+        Serial.println(chlor_last_start_minute);
+  }
 }
 
 
@@ -318,6 +364,30 @@ void read_heater(){
 
 
 
+
+
+void write_alive(){
+        Serial.println("Write Alive");
+        File file = LittleFS.open(datei_alive, "w");
+        if (!file) { Serial.println("LittleFS write error: alive"); return; }
+        delay(100);
+        file.write(reinterpret_cast<uint8_t*>(&check_alive), sizeof(check_alive));
+        file.write(reinterpret_cast<uint8_t*>(&alive_interval), sizeof(alive_interval));
+        file.write(reinterpret_cast<uint8_t*>(&hostname_alive), sizeof(hostname_alive));
+        file.close();
+}
+
+void read_alive(){
+  File file = LittleFS.open(datei_alive, "r");
+  if ( file ){
+        Serial.println("Read Alive");
+        delay(100);
+        file.read(reinterpret_cast<uint8_t*>(&check_alive), sizeof(check_alive));
+        file.read(reinterpret_cast<uint8_t*>(&alive_interval), sizeof(alive_interval));
+        file.read(reinterpret_cast<uint8_t*>(&hostname_alive), sizeof(hostname_alive));
+        file.close();
+  }
+}
 
 
 // v6.1: AM2315C Offset-Kalibrierung

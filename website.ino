@@ -1,5 +1,5 @@
 /* *****************************************************************
-   RWS Pool-Kit v6.3
+   RWS Pool-Kit v7.0
    Copyright (c) 2022-2026 Ridewithoutstomach
    https://rws.casa-eller.de
    https://github.com/ridewithoutstomach/rwspoolkit-esp32
@@ -21,6 +21,10 @@ void handleForm() {
       int z = strcmp(server.arg(0).c_str(), "OFF");
 
       if ( z == 0 ) {
+        // v7.0: Manual-Mode beenden. Erst Flag loeschen, dann ausschalten,
+        // sonst wuerde der Manual-Guard das call_pumpe_aus blockieren.
+        pump_manual_on = false;
+        pump_manual_start_ms = 0;
         timer_interval_delay = standard_timer_interval_delay;
         call_pumpe_aus();
         check_pump_on = "";
@@ -31,13 +35,17 @@ void handleForm() {
         server.send(200, "text/html", message);
       }
       else {
+        // v7.0: Manual ON friert Pumpenstufe auf pumpe_hand ein, Auto-Fallback nach 24h.
+        // Chlor-/PH-Logik laeuft normal weiter, nur Pumpenstufenwechsel sind blockiert.
+        pump_manual_on = true;
+        pump_manual_start_ms = millis();
         timer_interval_delay = 86400000;
         check_pump_on = "checked";
         check_pump_off = "";
         call_pumpe_hand();
         String message;
         addTop(message);
-        message += F("<br><h1><center><a href=\"pool.htm\" class=\"button3\">Don't forget to Reset!</a>");
+        message += F("<br><h1><center><a href=\"pool.htm\" class=\"button3\">Manual ON - auto-fallback in 24h</a>");
         server.send(200, "text/html", message);
       }
     }
@@ -470,27 +478,35 @@ void handleForm() {
     Serial.println(" ----------------- Server.has Arg  Chlorinator-........!");
     delay(100);
     if ( login ) {
-      int z = strcmp(server.arg(0).c_str(), "Yes");
-      if ( z == 0 ) {
-        check_chlorinator = true;
-        strcpy(check_orp_interval_delay, server.arg(1).c_str());
-        strcpy(hostname_chlorinator, server.arg(2).c_str());
-        strcpy(orp_dblchk, server.arg(3).c_str());
-        strcpy(ChlorInterval, server.arg(4).c_str());
-
+      check_chlorinator = (server.arg("check_chlorinator") == "Yes");
+      if (check_chlorinator) {
+        if (server.hasArg("check_orp_interval_delay")) strcpy(check_orp_interval_delay, server.arg("check_orp_interval_delay").c_str());
+        if (server.hasArg("hostname_chlorinator"))     strcpy(hostname_chlorinator,     server.arg("hostname_chlorinator").c_str());
+        if (server.hasArg("orp_dblchk"))               strcpy(orp_dblchk,               server.arg("orp_dblchk").c_str());
+        if (server.hasArg("ChlorInterval"))            strcpy(ChlorInterval,            server.arg("ChlorInterval").c_str());
+        // v7.0
+        if (server.hasArg("chlor_distribute_min"))     strcpy(chlor_distribute_min,     server.arg("chlor_distribute_min").c_str());
+        if (server.hasArg("chlor_daily_budget"))       strcpy(chlor_daily_budget,       server.arg("chlor_daily_budget").c_str());
+        chlor_safety_stop = (server.arg("chlor_safety_stop") == "Yes");
+        // v7.2
+        if (server.hasArg("chlor_warmup_min"))         strcpy(chlor_warmup_min,         server.arg("chlor_warmup_min").c_str());
       }
       else {
-        check_chlorinator = false;
         ThingSpeak.setField(String(chlorinatorID).toInt(), 0);
-
       }
 
       delay(100);
       write_chlorinator();
       delay(100);
       read_chlorinator();
-      orp_chk_counter = 0;
-      write_chlorinator();
+      // v7.0: Phasen-Reset bei jedem Save - Phase laeuft sauber neu an
+      // v7.1: ueber chlor_phase_set() damit auch chlor_phase_start_epoch korrekt gesetzt
+      // und die Phase persistiert wird (sonst wuerde der Resume nach naechstem Reboot
+      // die alte Phase wieder einlesen).
+      orp_chk_counter      = 0;
+      chlor_last_tick_ms   = 0;
+      timer_interval_delay = standard_timer_interval_delay;
+      chlor_phase_set(CHLOR_PHASE_OBSERVE);
 
       String message;
       addTop(message);
@@ -504,15 +520,44 @@ void handleForm() {
       server.send(200, "text/html", message);
     }
 
-
-
       alles_aus();
-
-
   }
 
 
   // ---------------------------------------------Chlorinator Abfrage Ende
+
+
+  // ---------------------------------------------Chlorinator Status-Reset (v7.1)
+  else if (server.hasArg("chlor_status_reset")) {
+    Serial.println(" ----------------- Server.has Arg  chlor_status_reset .-........!");
+    if ( login ) {
+      // Hardware sicherheitshalber abschalten, falls wir aus DOSE/DISTRIBUTE kommen
+      if (chlor_phase == CHLOR_PHASE_DOSE || chlor_phase == CHLOR_PHASE_DISTRIBUTE) {
+        chlorinator_off();
+      }
+      orp_chk_counter         = 0;
+      orp_chk_counter_read    = 0;
+      chlor_today_count       = 0;
+      chlor_last_start_minute = -1;
+      chlor_last_start_epoch  = 0;
+      chlor_last_tick_ms      = 0;
+      timer_interval_delay    = standard_timer_interval_delay;
+      // chlor_phase_set persistiert phase + start_epoch + den oben gesetzten Rest in einem Rutsch
+      chlor_phase_set(CHLOR_PHASE_OBSERVE);
+
+      String message;
+      addTop(message);
+      message += F("<br><h1><center><a href=\"chlorinator.htm\" class=\"button3\">Chlor-Status zur&uuml;ckgesetzt</a>");
+      server.send(200, "text/html", message);
+    }
+    else {
+      String message;
+      addTop(message);
+      message += F("<br><h1><center><a href=\"/\" class=\"button3\">Login first!</a>");
+      server.send(200, "text/html", message);
+    }
+  }
+  // ---------------------------------------------Chlorinator Status-Reset Ende
 
 
 
@@ -638,6 +683,37 @@ void handleForm() {
   // -------------------------------------------   Heater Abfrage Ende
 
 
+  // -------------------------------------------   Alive Abfrage Anfang
+  else if (server.hasArg("check_alive")) {
+    Serial.println(" ----------------- Server.has Arg  Alive -.........!");
+    delay(100);
+    if ( login ) {
+      check_alive = (server.arg("check_alive") == "Yes");
+      if (server.hasArg("alive_interval")) strcpy(alive_interval, server.arg("alive_interval").c_str());
+      if (server.hasArg("hostname_alive")) strcpy(hostname_alive, server.arg("hostname_alive").c_str());
+
+      delay(100);
+      write_alive();
+      delay(100);
+      read_alive();
+      alive_fail_time = 0;          // Failure-Cache zuruecksetzen
+      previousMillis_alive = 0;     // sofort senden beim naechsten Loop
+
+      String message;
+      addTop(message);
+      message += F("<br><h1><center><a href=\"alive.htm\"  class=\"button3\">Safed.. back to page</a>");
+      server.send(200, "text/html", message);
+    }
+    else {
+      String message;
+      addTop(message);
+      message += F("<br><h1><center><a href=\"/\"  class=\"button3\">Login first!</a>");
+      server.send(200, "text/html", message);
+    }
+  }
+  // -------------------------------------------   Alive Abfrage Ende
+
+
   // -------------------------------------------   WiFi Abfrage Anfang (v6.3)
   else if (server.hasArg("wifi_ssid" ) ) {
     Serial.println(" --- Server.has Arg WiFi ---");
@@ -737,6 +813,7 @@ void handleForm() {
       summer = false;
       utcOffsetInSeconds = 3600;
     }
+    timeClient.setTimeOffset(utcOffsetInSeconds);
 
     // 24 Timer auslesen
     // Checkboxen: nicht angehakte werden NICHT gesendet, daher erstmal alle auf false
@@ -839,7 +916,7 @@ void handleRoot() {
                    "<link rel='stylesheet' type='text/css' href='/style.css'>\n"
                    "</head>\n");
       message += F("<body>\n");
-      message += F("<header>\n<h1>RWS Pool-KIT (V6.3)</h1>\n</header>\n<main>\n");
+      message += F("<header>\n<h1>RWS Pool-KIT (V7.0)</h1>\n</header>\n<main>\n");
       message += F("<h2><center>WiFi Konfiguration</h2>");
       message += F("<center><form method='POST' action='/wifisave'><table>");
 
@@ -880,13 +957,13 @@ void handleRoot() {
       message =  F("<!DOCTYPE html>\n"
                    "<html lang='en'>\n"
                    "<head>\n"
-                   "<title>RWS POOL-Kit V6.3</title>\n"
+                   "<title>RWS POOL-Kit V7.0</title>\n"
                    "<meta http-equiv=\"content-type\" content=\"text/html; charset=utf-8\">\n"
                    "<meta name=\"viewport\" content=\"width=device-width\">\n"
                    "<link rel='stylesheet' type='text/css' href='/style.css'>\n"
                    "</head>\n");
       message += F("<body>\n");
-      message += F("<header>\n<h1><center>RWS Pool-Kit V6.3</center></h1>\n"
+      message += F("<header>\n<h1><center>RWS Pool-Kit V7.0</center></h1>\n"
                    "<nav><p></p></nav>\n</header>\n"
                    "<main>\n");
       message += F("<h2><center>Login!</h2>");
@@ -922,14 +999,13 @@ void handleRoot() {
       message += orp_max;
       message += F(")<br>  WaterTemp: ");
       message += RTD.get_last_received_reading();
-      message += F("<br>  ESP-Zeit: <b>");
+      message += F("<br>  <small style=\"color:#888\">ESP-Zeit: ");
       message += String(timeClient.getHours());
       message += F(":");
       if (timeClient.getMinutes() < 10) message += F("0");
       message += String(timeClient.getMinutes());
-      message += F("</b>");
-      if (summer) message += F(" (Sommerzeit)");
       if (!ntp_synced) message += F(" <em>(!NTP nicht sync!)</em>");
+      message += F("</small>");
       message += F("<br>  Shaft-Temp: ");
       message += dht_temp();
       message += F("&deg;C");
@@ -941,17 +1017,13 @@ void handleRoot() {
       message += F(" / ");
       message += humidity_min;
       message += F(" ]");
-
       message += ("<br>");
-      message += (check_chlorinator ? F("<span style=\"color:#0c0\">&#9679;</span> ") : F("<span style=\"color:#c00\">&#9679;</span> "));
-      message += F("ORP_Counter: ");
-      message += orp_chk_counter;
-      message += F("&nbsp; (");
-      message += orp_dblchk;
-      message += F(" * ");
-      message += check_orp_interval_delay;
-      message += F("s)<br>");
-      message += (check_phminus ? F("<span style=\"color:#0c0\">&#9679;</span> ") : F("<span style=\"color:#c00\">&#9679;</span> "));
+
+      // v7.0: Manual-Pump-ON Status (gibt nichts aus wenn nicht aktiv)
+      pump_manual_dashboard_block(message);
+
+      // Counter direkt nach Humidity - eigene Zeilen
+      message += (check_phminus ? F("<span style=\"color:#0c0\">&#x2714;</span> ") : F("<span style=\"color:#c00\">&#x2716;</span> "));
       message += F("PHMinus_Counter: ");
       message += phminus_dblchk_counter;
       message += F("&nbsp; (");
@@ -959,8 +1031,17 @@ void handleRoot() {
       message += F(" * ");
       message += check_phMinus_interval_delay;
       message += F("min)<br>");
+      message += F("ORP-Counter: ");
+      message += orp_chk_counter;
+      message += F("/");
+      message += orp_dblchk;
+      message += F("<br>");
+
+      // Chlor-Phase + Today/last/next + Warmup + Pumpe-Aus
+      chlor_dashboard_block(message);
+
       if (flow_show || check_flow) {
-        message += (check_flow ? F("<span style=\"color:#0c0\">&#9679;</span> ") : F("<span style=\"color:#ec0\">&#9679;</span> "));
+        message += (check_flow ? F("<span style=\"color:#0c0\">&#x2714;</span> ") : F("<span style=\"color:#ec0\">&#x2716;</span> "));
         message += F("Flow: ");
         message += flow;
         message += F("<br>");
@@ -1006,14 +1087,13 @@ void handleRoot() {
     message += orp_max;
     message += F(")<br>  WaterTemp: ");
     message += RTD.get_last_received_reading();
-    message += F("<br>  ESP-Zeit: <b>");
+    message += F("<br>  <small style=\"color:#888\">ESP-Zeit: ");
     message += String(timeClient.getHours());
     message += F(":");
     if (timeClient.getMinutes() < 10) message += F("0");
     message += String(timeClient.getMinutes());
-    message += F("</b>");
-    if (summer) message += F(" (Sommerzeit)");
     if (!ntp_synced) message += F(" <em>(!NTP nicht sync!)</em>");
+    message += F("</small>");
     message += F("<br>  Shaft-Temp: ");
     message += dht_temp();
     message += F("&deg;C");
@@ -1026,15 +1106,12 @@ void handleRoot() {
     message += humidity_min;
     message += F(" ]");
     message += ("<br>");
-    message += (check_chlorinator ? F("<span style=\"color:#0c0\">&#9679;</span> ") : F("<span style=\"color:#c00\">&#9679;</span> "));
-    message += F("ORP_Counter: ");
-    message += orp_chk_counter;
-    message += F("&nbsp; (");
-    message += orp_dblchk;
-    message += F(" * ");
-    message += check_orp_interval_delay;
-    message += F("s)<br>");
-    message += (check_phminus ? F("<span style=\"color:#0c0\">&#9679;</span> ") : F("<span style=\"color:#c00\">&#9679;</span> "));
+
+    // v7.0: Manual-Pump-ON Status (gibt nichts aus wenn nicht aktiv)
+    pump_manual_dashboard_block(message);
+
+    // Counter direkt nach Humidity - eigene Zeilen
+    message += (check_phminus ? F("<span style=\"color:#0c0\">&#x2714;</span> ") : F("<span style=\"color:#c00\">&#x2716;</span> "));
     message += F("PHMinus_Counter: ");
     message += phminus_dblchk_counter;
     message += F("&nbsp; (");
@@ -1042,8 +1119,17 @@ void handleRoot() {
     message += F(" * ");
     message += check_phMinus_interval_delay;
     message += F("min)<br>");
+    message += F("ORP-Counter: ");
+    message += orp_chk_counter;
+    message += F("/");
+    message += orp_dblchk;
+    message += F("<br>");
+
+    // Chlor-Phase + Today/last/next + Warmup + Pumpe-Aus
+    chlor_dashboard_block(message);
+
     if (flow_show || check_flow) {
-      message += (check_flow ? F("<span style=\"color:#0c0\">&#9679;</span> ") : F("<span style=\"color:#ec0\">&#9679;</span> "));
+      message += (check_flow ? F("<span style=\"color:#0c0\">&#x2714;</span> ") : F("<span style=\"color:#ec0\">&#x2716;</span> "));
       message += F("Flow: ");
       message += flow;
       message += F("<br>");
@@ -1155,7 +1241,7 @@ void addTop(String &message)
                "<link rel='stylesheet' type='text/css' href='/style.css'>\n"
                "</head>\n");
   message += F("<body>\n");
-  message += F("<header>\n<h1>RWS Pool-KIT (V6.3)</h1>\n"
+  message += F("<header>\n<h1>RWS Pool-KIT (V7.0)</h1>\n"
                "<nav><center><p>"
                "<a href=\"/\" class=\"button3\">Dashboard</a>"
                "<a href=\"pool.htm\" class=\"button3\">Pool&Pump</a>"
@@ -1164,6 +1250,7 @@ void addTop(String &message)
                "<a href=\"chlorinator.htm\" class=\"button3\">Chlorinator</a>"
                "<a href=\"phminus.htm\" class=\"button3\">PHMinus</a>"
                "<a href=\"heater.htm\" class=\"button3\">Heater&Fan</a>"
+               "<a href=\"alive.htm\" class=\"button3\">Alive</a>"
                "<a href=\"timer.htm\" class=\"button3\">Timer</a>"
                "<a href=\"calibration.htm\" class=\"button3\">Calibration</a>"
                "<a href=\"pw.htm\" class=\"button3\">PIN</a>"
@@ -1188,7 +1275,7 @@ void addTop2(String &message)
                "<link rel='stylesheet' type='text/css' href='/style.css'>\n"
                "</head>\n");
   message += F("<body>\n");
-  message += F("<header>\n<h1>RWS Pool-KIT (V6.3)</h1>\n"
+  message += F("<header>\n<h1>RWS Pool-KIT (V7.0)</h1>\n"
                "</center><main>\n");
 }
 
@@ -1197,7 +1284,7 @@ void addBottom(String &message) {
   message += F("</main>\n"
                "<footer>\n<p>");
   message += F("<span id='min'>");
-  message += ("&nbsp; RWS Pool-KIT V6.3 - (c)2021-2026 Bernd Eller <br>");
+  message += ("&nbsp; RWS Pool-KIT V7.0 - (c)2021-2026 Bernd Eller <br>");
   message += ("&nbsp; uptime: ");
   message += uptime_formatter::getUptime();
   server.send(200, "text/html", message);

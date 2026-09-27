@@ -1,4 +1,4 @@
-# RWS Pool-Kit v6.3 (ESP32)
+# RWS Pool-Kit v7.0 (ESP32)
 
 Web-based pool controller built on the **Atlas Scientific Wi-Fi Pool Kit V1.8**.
 
